@@ -1,0 +1,15 @@
+services:
+  web:
+    build:
+      context: .
+    container_name: checkonit-web
+    restart: unless-stopped
+
+    env_file:
+      - .env.local
+
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    mem_limit: 512m
+    cpus: "0.35"
