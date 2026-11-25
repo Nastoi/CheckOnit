@@ -351,12 +351,20 @@ export default function ChatShell({
     setError("");
     setInput("");
 
+    const userMessageId = newId();
+    const assistantMessageId = newId();
+
     setMessages((current) => [
       ...current,
       {
-        id: newId(),
+        id: userMessageId,
         role: "user",
         content: message,
+      },
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
       },
     ]);
 
@@ -377,27 +385,206 @@ export default function ChatShell({
         }),
       });
 
-      const data = await response.json();
-
+      /*
+        Error responses from our API route are still JSON.
+      */
       if (!response.ok) {
+        const contentType =
+          response.headers.get("content-type") || "";
+
+        if (contentType.includes("application/json")) {
+          const errorData = await response.json();
+
+          throw new Error(
+            errorData.error || "Unable to send the message."
+          );
+        }
+
+        const errorText = await response.text();
+
         throw new Error(
-          data.error || "Unable to send the message."
+          errorText || "Unable to send the message."
         );
       }
 
-      if (data.conversationId) {
-        setConversationId(data.conversationId);
+      if (!response.body) {
+        throw new Error(
+          "The assistant returned no response stream."
+        );
       }
 
-      setMessages((current) => [
-        ...current,
-        {
-          id: data.messageId || newId(),
-          role: "assistant",
-          content: data.answer,
-        },
-      ]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      let buffer = "";
+      let assistantText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, {
+          stream: true,
+        });
+
+        /*
+          Dify uses Server-Sent Events.
+
+          Each event normally looks like:
+
+          data: {"event":"message","answer":"hello",...}
+
+        */
+        const lines = buffer.split("\n");
+
+        /*
+          Keep the last incomplete line for the next chunk.
+        */
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+
+          if (!trimmed) {
+            continue;
+          }
+
+          if (!trimmed.startsWith("data:")) {
+            continue;
+          }
+
+          const jsonText = trimmed
+            .slice(5)
+            .trim();
+
+          if (!jsonText || jsonText === "[DONE]") {
+            continue;
+          }
+
+          try {
+            const event = JSON.parse(jsonText);
+
+            /*
+              Save conversation ID as soon as Dify provides it.
+            */
+            if (event.conversation_id) {
+              setConversationId(
+                event.conversation_id
+              );
+            }
+
+            /*
+              Dify streaming text chunks.
+
+              Depending on the app/model,
+              the event can be "message" or
+              "agent_message".
+            */
+            if (
+              event.event === "message" ||
+              event.event === "agent_message"
+            ) {
+              if (typeof event.answer === "string") {
+                assistantText += event.answer;
+
+                setMessages((current) =>
+                  current.map((item) =>
+                    item.id === assistantMessageId
+                      ? {
+                          ...item,
+                          content: assistantText,
+                        }
+                      : item
+                  )
+                );
+              }
+            }
+
+            /*
+              Some Dify responses provide the final
+              message ID during message_end.
+            */
+            if (event.event === "message_end") {
+              if (event.message_id) {
+                setMessages((current) =>
+                  current.map((item) =>
+                    item.id === assistantMessageId
+                      ? {
+                          ...item,
+                          id: event.message_id,
+                        }
+                      : item
+                  )
+                );
+              }
+            }
+
+            /*
+              Dify can emit explicit error events
+              inside an otherwise successful SSE response.
+            */
+            if (event.event === "error") {
+              throw new Error(
+                event.message ||
+                  "The assistant service returned an error."
+              );
+            }
+          } catch (parseError) {
+            /*
+              Re-throw actual Dify error events.
+              Ignore only malformed/incomplete SSE JSON.
+            */
+            if (
+              parseError instanceof Error &&
+              parseError.message !==
+                "Unexpected end of JSON input"
+            ) {
+              console.error(
+                "Unable to process Dify stream event:",
+                jsonText,
+                parseError
+              );
+            }
+          }
+        }
+      }
+
+      /*
+        Flush any remaining decoder bytes.
+      */
+      buffer += decoder.decode();
+
+      /*
+        If Dify completed without any answer text,
+        replace the empty assistant bubble.
+      */
+      if (!assistantText.trim()) {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? {
+                  ...item,
+                  content:
+                    "I do not have a response for that request.",
+                }
+              : item
+          )
+        );
+      }
     } catch (caught) {
+      /*
+        Remove the blank/partial assistant message
+        if the request failed.
+      */
+      setMessages((current) =>
+        current.filter(
+          (item) => item.id !== assistantMessageId
+        )
+      );
+
       setError(
         caught instanceof Error
           ? caught.message

@@ -11,14 +11,6 @@ type ChatRequest = {
   conversationId?: string;
 };
 
-type DifyResponse = {
-  answer?: string;
-  conversation_id?: string;
-  message_id?: string;
-  error?: string;
-  message?: string;
-};
-
 function isEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
@@ -55,7 +47,9 @@ export async function POST(request: Request) {
     );
   }
 
-  const baseUrl = process.env.DIFY_BASE_URL?.replace(/\/$/, "");
+  const baseUrl =
+    process.env.DIFY_BASE_URL?.replace(/\/$/, "");
+
   const apiKey = process.env.DIFY_API_KEY;
 
   if (!baseUrl || !apiKey) {
@@ -76,61 +70,91 @@ export async function POST(request: Request) {
       "checkonit-staff";
 
   try {
-    const response = await fetch(`${baseUrl}/chat-messages`, {
-      method: "POST",
+    const response = await fetch(
+      `${baseUrl}/chat-messages`,
+      {
+        method: "POST",
 
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-
-      body: JSON.stringify({
-        inputs: {
-          learner_email: learnerEmail,
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
         },
 
-        query: message,
-        response_mode: "blocking",
-        conversation_id: body.conversationId || "",
-        user: difyUser,
-      }),
+        body: JSON.stringify({
+          inputs: {
+            learner_email: learnerEmail,
+          },
 
-      cache: "no-store",
-    });
+          query: message,
+          response_mode: "streaming",
+          conversation_id: body.conversationId || "",
+          user: difyUser,
+        }),
 
-    const data = (await response.json()) as DifyResponse;
+        cache: "no-store",
+      }
+    );
 
     if (!response.ok) {
-      console.error(
-        "Dify request failed",
-        response.status,
-        data
-      );
+      const raw = await response.text();
+
+      console.error("Dify request failed", {
+        status: response.status,
+        contentType:
+          response.headers.get("content-type") || "",
+        body: raw.slice(0, 2000),
+      });
 
       return NextResponse.json(
         {
           error:
-            data.message ||
-            data.error ||
             `Dify returned HTTP ${response.status}.`,
         },
         { status: 502 }
       );
     }
 
-    return NextResponse.json({
-      answer:
-        data.answer ||
-        "I do not have a response for that request.",
+    if (!response.body) {
+      console.error(
+        "Dify returned no response stream."
+      );
 
-      conversationId:
-        data.conversation_id ||
-        body.conversationId ||
-        "",
+      return NextResponse.json(
+        {
+          error:
+            "The assistant service returned no response stream.",
+        },
+        { status: 502 }
+      );
+    }
 
-      messageId:
-        data.message_id || "",
+    /*
+      Dify streaming mode returns Server-Sent Events (SSE).
+
+      Do NOT call response.json() or response.text()
+      for successful requests.
+
+      Pass the stream directly to the browser.
+    */
+    return new Response(response.body, {
+      status: 200,
+
+      headers: {
+        "Content-Type":
+          "text/event-stream; charset=utf-8",
+
+        "Cache-Control":
+          "no-cache, no-transform",
+
+        Connection:
+          "keep-alive",
+
+        "X-Accel-Buffering":
+          "no",
+      },
     });
+
   } catch (error) {
     console.error("Unable to reach Dify", error);
 
