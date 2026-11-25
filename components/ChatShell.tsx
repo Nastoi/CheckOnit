@@ -41,7 +41,7 @@ export default function ChatShell({
   const [conversationId, setConversationId] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState("");
-
+  const [hasStartedStreaming, setHasStartedStreaming] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -361,12 +361,9 @@ export default function ChatShell({
         role: "user",
         content: message,
       },
-      {
-        id: assistantMessageId,
-        role: "assistant",
-        content: "",
-      },
     ]);
+
+    setHasStartedStreaming(false);
 
     setIsSending(true);
 
@@ -487,19 +484,37 @@ export default function ChatShell({
               event.event === "message" ||
               event.event === "agent_message"
             ) {
-              if (typeof event.answer === "string") {
+              if (
+                typeof event.answer === "string" &&
+                event.answer.length > 0
+              ) {
+                const isFirstChunk = assistantText.length === 0;
+
                 assistantText += event.answer;
 
-                setMessages((current) =>
-                  current.map((item) =>
-                    item.id === assistantMessageId
-                      ? {
-                          ...item,
-                          content: assistantText,
-                        }
-                      : item
-                  )
-                );
+                if (isFirstChunk) {
+                  setHasStartedStreaming(true);
+
+                  setMessages((current) => [
+                    ...current,
+                    {
+                      id: assistantMessageId,
+                      role: "assistant",
+                      content: assistantText,
+                    },
+                  ]);
+                } else {
+                  setMessages((current) =>
+                    current.map((item) =>
+                      item.id === assistantMessageId
+                        ? {
+                            ...item,
+                            content: assistantText,
+                          }
+                        : item
+                    )
+                  );
+                }
               }
             }
 
@@ -592,6 +607,7 @@ export default function ChatShell({
       );
     } finally {
       setIsSending(false);
+      setHasStartedStreaming(false);
 
       requestAnimationFrame(() => {
         inputRef.current?.focus();
@@ -857,7 +873,7 @@ export default function ChatShell({
                     </article>
                   ))}
 
-                  {isSending && (
+                  {isSending && !hasStartedStreaming && (
                     <article className="chat-message assistant">
                       <div className="message-role">
                         Checking On It

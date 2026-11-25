@@ -6,10 +6,18 @@ services:
     restart: unless-stopped
 
     env_file:
-      - .env.local
+      - .env
 
     ports:
       - "127.0.0.1:3000:3000"
 
     mem_limit: 512m
     cpus: "0.35"
+
+    networks:
+      - checkonit
+
+networks:
+  checkonit:
+    external: true
+    name: checkonit-net
