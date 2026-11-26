@@ -976,12 +976,12 @@ export default function ChatShell({
                             type="button"
                             onClick={() => {
                               setInput(
-                                "Check the learner's attendance verification"
+                                "Check the learner's TA eligibility"
                               );
                               setShowTopics(false);
                             }}
                           >
-                            Attendance verification
+                            TA eligibility
                           </button>
 
                           <button
